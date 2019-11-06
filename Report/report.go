@@ -13,10 +13,8 @@ import (
 grafana 计算指定时间内打点个数
 */
 type MonitorMessage struct {
+	
 	Meter string `json:"meter"`
-
-	//每次上报的计算机信息
-	//Value *LocalMessage `json:"value"`
 
 	Tags map[string]interface{} `json:"tags"`
 
@@ -39,6 +37,8 @@ type MonitorMessage struct {
 	MarkM1 int64 `json:"mark_m_1"`
 	MarkM5 int64 `json:"mark_m_5"`
 	MarkM15 int64 `json:"mark_m_15"`
+
+	//Lock *sync.Mutex
 }
 
 var (
@@ -51,6 +51,8 @@ var (
 	chReport = make(chan *MonitorMessage, 10000000)
 
 	isStartPro = false
+
+	isReport = true
 )
 
 const (
@@ -90,6 +92,8 @@ func (msg *MonitorMessage) Register() string {
 		}
 		meterStruct.Period = period
 		meterStruct.OpenTsDbUrl = msg.OpenTsDbUrl
+
+		//Lock = new(sync.Mutex)
 
 		meterMap[msg.Meter] = meterStruct
 	}
@@ -136,11 +140,77 @@ func consumerReport() {
 			continue
 		} else {
 			monMessage := meterMap[monitor.Meter]
-
 			monMessage.Mark = monMessage.Mark + 1
 			monMessage.MarkM1 = monMessage.MarkM1 + 1
 			monMessage.MarkM5 = monMessage.MarkM5 + 1
 			monMessage.MarkM15 = monMessage.MarkM15 + 1
+
+			//检查是否满足上报，由timieReport控制是否要上报
+			if isReport {
+
+				for key, value := range meterMap {
+
+					currTime := time.Now().Unix()
+					//满足上报条件，执行上报
+					if (currTime - value.LastMarkSendTs) >= value.Period {
+
+						markM1 := value.MarkM1
+						markM5 := value.MarkM5
+						markM15 := value.MarkM15
+
+						//把打点的值置为0
+						if (currTime - value.LastMarkM1SendTs) >= 60{
+							value.MarkM1 = 0
+							value.LastMarkM1SendTs = currTime
+						}
+						if (currTime - value.LastMarkM5SendTs) >= 300{
+							value.MarkM5 = 0
+							value.LastMarkM5SendTs = currTime
+						}
+						if (currTime - value.LastMarkM15SendTs) >= 900{
+							value.MarkM15 = 0
+							value.LastMarkM15SendTs = currTime
+						}
+
+						//重置上报时间
+						value.LastMarkSendTs = currTime
+
+						for _, meterKey := range []string{".m1", ".m5", ".m15"}{
+
+							go func(meterKey string) {
+								reportStruct := make(map[string]interface{})
+								reportStruct["metric"] = key+meterKey
+								reportStruct["timestamp"] = currTime
+
+								if meterKey == ".m1"{//m1的值是每过一分钟清空一次，下面一次类推
+									reportStruct["value"] = markM1
+								}else if meterKey == ".m5"{
+									reportStruct["value"] = markM5
+								}else if meterKey == ".m15"{
+									reportStruct["value"] = markM15
+								}
+
+								reportStruct["tags"] = value.Tags
+
+								body, err := json.Marshal(reportStruct)
+								if err != nil {
+									log.Error(err)
+									return
+								}
+
+								//log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
+
+								//上报信息
+								cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), value.OpenTsDbUrl)
+								exec.Command("bash", "-c", cmd).Output()
+							}(meterKey)
+						}
+
+					}
+
+				}
+				isReport = false
+			}
 		}
 	}
 
@@ -152,71 +222,7 @@ func consumerReport() {
 func timieReport() {
 
 	for {
-		go func() {
-			for key, value := range meterMap {
-
-				currTime := time.Now().Unix()
-				//满足上报条件，执行上报
-				if (currTime - value.LastMarkSendTs) >= value.Period {
-
-					//重置上报时间
-					value.LastMarkSendTs = currTime
-
-					for _, meterKey := range []string{".count", ".m1", ".m5", ".m15"}{
-						go func(meterKey string) {
-							reportStruct := make(map[string]interface{})
-							reportStruct["metric"] = key+meterKey
-							reportStruct["timestamp"] = currTime
-
-							//count的mark值是一直++
-							if meterKey == ".count"{
-								reportStruct["value"] = value.Mark
-								value.LastMarkSendTs = currTime
-							}else if meterKey == ".m1"{//m1的值是每过一分钟清空一次，下面一次类推
-								reportStruct["value"] = value.MarkM1
-								if (currTime - value.LastMarkM1SendTs) >= 60{
-									value.MarkM1 = 0
-									value.LastMarkM1SendTs = currTime
-								}
-							}else if meterKey == ".m5"{
-								reportStruct["value"] = value.MarkM5
-								if (currTime - value.LastMarkM5SendTs) >= 300{
-									value.MarkM5 = 0
-									value.LastMarkM5SendTs = currTime
-								}
-							}else if meterKey == ".m15"{
-								reportStruct["value"] = value.MarkM15
-								if (currTime - value.LastMarkM15SendTs) >= 900{
-									value.MarkM15 = 0
-									value.LastMarkM15SendTs = currTime
-								}
-							}
-
-							reportStruct["tags"] = value.Tags
-
-							body, err := json.Marshal(reportStruct)
-							if err != nil {
-								log.Error(err)
-								return
-							}
-
-							log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
-
-							//上报信息
-							cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), value.OpenTsDbUrl)
-							out, err := exec.Command("bash", "-c", cmd).Output()
-							if err != nil {
-								log.Error(err)
-							}
-							log.Infof("report data %s = %s", key,string(out))
-						}(meterKey)
-					}
-
-				}
-
-			}
-		}()
-		log.Infof("sleep %d s", 1)
+		isReport = true
 		time.Sleep(1 * time.Second)
 	}
 }
