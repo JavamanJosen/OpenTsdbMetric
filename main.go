@@ -2,30 +2,32 @@ package main
 
 import (
 	"OpenTsdbMetric/Report"
+	"fmt"
 	"time"
 )
 
 func main()  {
 	report := &Report.MonitorMessage{}
-	locMsg := &Report.LocalMessage{}
-	//openTsDb地址
-	locMsg.OpenTsDbUrl = ""
+	report.OpenTsDbUrl = "http://tsdb-service.internal.zenmen.com/api/put"
 	hostName, _ := Report.GetHostName()
-	locMsg.Host = hostName
-	locMsg.Period = 10
+	report.Host = hostName
+	report.Period = 2
 	report.Meter = "test.test_123"
-	report.Value = locMsg
 
 	report.Register()
 
 	time.Sleep(1*time.Second)
 
-	for i:=0; i<10; i++{
-		for j:=0; j<1000000; j++{
-			report.Report()
+	for i:=0; i<10000; i++{
+		for j:=0; j<100000; j++{
+			go func() {
+				report.Report()
+			}()
 		}
 
 		time.Sleep(1*time.Second)
+
+		println(fmt.Sprintf("报告 %d 点", i+1))
 		//x := rand.Intn(5)   //生成0-99随机整数
 
 		//println(fmt.Sprintf("i = %d, report = %s, sleep = %d", i, resp, x))
