@@ -13,7 +13,7 @@ import (
 grafana 计算指定时间内打点个数
 */
 type MonitorMessage struct {
-	
+
 	Meter string `json:"meter"`
 
 	Tags map[string]interface{} `json:"tags"`
@@ -154,11 +154,16 @@ func consumerReport() {
 					//满足上报条件，执行上报
 					if (currTime - value.LastMarkSendTs) >= value.Period {
 
+						qps := value.Mark
 						markM1 := value.MarkM1
 						markM5 := value.MarkM5
 						markM15 := value.MarkM15
 
 						//把打点的值置为0
+						if (currTime - value.LastMarkSendTs) >= value.Period{
+							value.Mark = 0
+							value.LastMarkSendTs = currTime
+						}
 						if (currTime - value.LastMarkM1SendTs) >= 60{
 							value.MarkM1 = 0
 							value.LastMarkM1SendTs = currTime
@@ -175,14 +180,15 @@ func consumerReport() {
 						//重置上报时间
 						value.LastMarkSendTs = currTime
 
-						for _, meterKey := range []string{".m1", ".m5", ".m15"}{
+						for _, meterKey := range []string{".qps", ".m1", ".m5", ".m15"}{
 
 							go func(meterKey string) {
 								reportStruct := make(map[string]interface{})
 								reportStruct["metric"] = key+meterKey
 								reportStruct["timestamp"] = currTime
-
-								if meterKey == ".m1"{//m1的值是每过一分钟清空一次，下面一次类推
+								if meterKey == ".qps"{
+									reportStruct["value"] = qps
+								}else if meterKey == ".m1"{//m1的值是每过一分钟清空一次，下面一次类推
 									reportStruct["value"] = markM1
 								}else if meterKey == ".m5"{
 									reportStruct["value"] = markM5
@@ -198,7 +204,7 @@ func consumerReport() {
 									return
 								}
 
-								//log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
+								log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
 
 								//上报信息
 								cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), value.OpenTsDbUrl)
