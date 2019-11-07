@@ -13,7 +13,6 @@ import (
 grafana 计算指定时间内打点个数
 */
 type MonitorMessage struct {
-
 	Meter string `json:"meter"`
 
 	Tags map[string]interface{} `json:"tags"`
@@ -27,15 +26,15 @@ type MonitorMessage struct {
 	OpenTsDbUrl string `json:"open_ts_db_url"`
 
 	//记录上一次report的时间
-	LastMarkSendTs int64 `json:"last_send_ts"`
-	LastMarkM1SendTs int64 `json:"last_mark_m_1_send_ts"`
-	LastMarkM5SendTs int64 `json:"last_mark_m_5_send_ts"`
+	LastMarkSendTs    int64 `json:"last_send_ts"`
+	LastMarkM1SendTs  int64 `json:"last_mark_m_1_send_ts"`
+	LastMarkM5SendTs  int64 `json:"last_mark_m_5_send_ts"`
 	LastMarkM15SendTs int64 `json:"last_mark_m_15_send_ts"`
 
 	//mark
-	Mark int64 `json:"mark"`
-	MarkM1 int64 `json:"mark_m_1"`
-	MarkM5 int64 `json:"mark_m_5"`
+	Mark    int64 `json:"mark"`
+	MarkM1  int64 `json:"mark_m_1"`
+	MarkM5  int64 `json:"mark_m_5"`
 	MarkM15 int64 `json:"mark_m_15"`
 
 	//Lock *sync.Mutex
@@ -147,9 +146,9 @@ func consumerReport() {
 
 			//检查是否满足上报，由timieReport控制是否要上报
 			if isReport {
-
+				log.Infof("meterMap size is %d", len(meterMap))
 				for key, value := range meterMap {
-
+					log.Infof("key = %s", key)
 					currTime := time.Now().Unix()
 					//满足上报条件，执行上报
 					if (currTime - value.LastMarkSendTs) >= value.Period {
@@ -160,19 +159,19 @@ func consumerReport() {
 						markM15 := value.MarkM15
 
 						//把打点的值置为0
-						if (currTime - value.LastMarkSendTs) >= value.Period{
+						if (currTime - value.LastMarkSendTs) >= value.Period {
 							value.Mark = 0
 							value.LastMarkSendTs = currTime
 						}
-						if (currTime - value.LastMarkM1SendTs) >= 60{
+						if (currTime - value.LastMarkM1SendTs) >= 60 {
 							value.MarkM1 = 0
 							value.LastMarkM1SendTs = currTime
 						}
-						if (currTime - value.LastMarkM5SendTs) >= 300{
+						if (currTime - value.LastMarkM5SendTs) >= 300 {
 							value.MarkM5 = 0
 							value.LastMarkM5SendTs = currTime
 						}
-						if (currTime - value.LastMarkM15SendTs) >= 900{
+						if (currTime - value.LastMarkM15SendTs) >= 900 {
 							value.MarkM15 = 0
 							value.LastMarkM15SendTs = currTime
 						}
@@ -180,36 +179,37 @@ func consumerReport() {
 						//重置上报时间
 						value.LastMarkSendTs = currTime
 
-						for _, meterKey := range []string{".qps", ".m1", ".m5", ".m15"}{
+						for _, meterKey := range []string{".qps", ".m1", ".m5", ".m15"} {
 
-							go func(meterKey string) {
-								reportStruct := make(map[string]interface{})
-								reportStruct["metric"] = key+meterKey
-								reportStruct["timestamp"] = currTime
-								if meterKey == ".qps"{
-									reportStruct["value"] = qps
-								}else if meterKey == ".m1"{//m1的值是每过一分钟清空一次，下面一次类推
-									reportStruct["value"] = markM1
-								}else if meterKey == ".m5"{
-									reportStruct["value"] = markM5
-								}else if meterKey == ".m15"{
-									reportStruct["value"] = markM15
-								}
+							//go func(meterKey string) {
+							reportStruct := make(map[string]interface{})
+							reportStruct["metric"] = key + meterKey
+							reportStruct["timestamp"] = currTime
+							if meterKey == ".qps" {
+								reportStruct["value"] = qps
+							} else if meterKey == ".m1" { //m1的值是每过一分钟清空一次，下面一次类推
+								reportStruct["value"] = markM1
+							} else if meterKey == ".m5" {
+								reportStruct["value"] = markM5
+							} else if meterKey == ".m15" {
+								reportStruct["value"] = markM15
+							}
 
-								reportStruct["tags"] = value.Tags
+							reportStruct["tags"] = value.Tags
 
-								body, err := json.Marshal(reportStruct)
-								if err != nil {
-									log.Error(err)
-									return
-								}
-
-								log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
-
-								//上报信息
+							body, err := json.Marshal(reportStruct)
+							if err != nil {
+								log.Error(err)
+								return
+							}
+							log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
+							//上报信息
+							go func(body []byte) {
 								cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), value.OpenTsDbUrl)
 								exec.Command("bash", "-c", cmd).Output()
-							}(meterKey)
+							}(body)
+
+							//}(meterKey)
 						}
 
 					}
