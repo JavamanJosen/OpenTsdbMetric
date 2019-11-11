@@ -6,12 +6,13 @@ import (
 	"github.com/hunterhug/marmot/miner"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
 /**
 由ReportFactor工厂结构体统一report
- */
+*/
 type ReportFactor struct {
 }
 
@@ -43,11 +44,17 @@ var (
 	//用来盛放
 	meterMap = map[string]*MonitorMessage{}
 
-	chReport = make(chan *MonitorMessage, 10000000)
+	//初始化 基本信息
+	autoStruct = &MonitorMessage{}
+
+	chReport = make(chan *MonitorMessage, 10000)
 
 	isStartPro = false
 
 	isReport = true
+
+	lock  sync.Locker
+
 )
 
 const (
@@ -61,46 +68,48 @@ const (
 */
 func (msg *MonitorMessage) Register() string {
 
-	meter := meterMap[msg.Meter]
-
-	//如果发现没有注册，执行注册
-	if meter == nil {
-		meterStruct := &MonitorMessage{}
-
-		currTime := time.Now().Unix()
-		meterStruct.LastMarkSendTs = currTime
+	//如果meter 是空，说明是首次注册，只需要把基本信息放入缓存即可
+	if msg.Meter == "" {
+		//初始化 锁
+		lock = new(sync.Mutex)
 
 		tags := make(map[string]interface{})
 		tags["host"] = msg.Host
-		meterStruct.Tags = tags
+		autoStruct.Tags = tags
+		autoStruct.Host = msg.Host
+		autoStruct.OpenTsDbUrl = msg.OpenTsDbUrl
 
-		if msg.Meter == "" || msg.Host == "" {
-			return "local message param is empty!"
+		//程序第一次启动，启动消费和定时上报程序
+		if isStartPro == false {
+
+			//启动消费程序
+			go consumerReport()
+
+			//启动定时上报程序
+			go timieReport()
+
+			isStartPro = true
 		}
 
+	} else {//非首次注册只需要把 非基本信息祖册到meterMap即可
+		meterStruct := &MonitorMessage{}
+
+		meterStruct.Tags = autoStruct.Tags
+		meterStruct.OpenTsDbUrl = autoStruct.OpenTsDbUrl
+
 		period := msg.Period
-		if period < 1 {
+		if period <= 0 {
 			period = PeriodDefault
 		}
 		meterStruct.Period = period
-		meterStruct.OpenTsDbUrl = msg.OpenTsDbUrl
-		meterStruct.Meter = msg.Meter
 
 		meterStruct.TimeWindow = make(map[int64]int64)
+		currTime := time.Now().Unix()
+		meterStruct.LastMarkSendTs = currTime
+
+		meterStruct.Meter = msg.Meter
 
 		meterMap[msg.Meter] = meterStruct
-	}
-
-	//程序第一次启动，启动消费和定时上报程序
-	if isStartPro == false {
-
-		//启动消费程序
-		go consumerReport()
-
-		//启动定时上报程序
-		go timieReport()
-
-		isStartPro = true
 	}
 
 	return "Register monitor success!"
@@ -120,18 +129,21 @@ func (monitor *MonitorMessage) Report() string {
 	return "success";
 }
 
-func (rf *ReportFactor) Report(Meter string) string {
-	result := "success"
-	monitor := meterMap[Meter]
-	if monitor == nil {
-		result = fmt.Sprintf("meter = %s 未注册，请先注册！", Meter)
-		log.Infof(result)
-		return result
+func (rf *ReportFactor) Report(meter string, period int64) string {
+
+	if meterStruct := meterMap[meter]; meterStruct == nil {
+
+		newMonitor := &MonitorMessage{}
+		newMonitor.Meter = meter
+		newMonitor.Period = period
+
+		reMsg := newMonitor.Register()
+		log.Infof("reMsg = %s", reMsg)
 	}
 
-	result = monitor.Report()
+	monitor := meterMap[meter]
 
-	return result
+	return monitor.Report()
 }
 
 /**
@@ -140,47 +152,19 @@ func (rf *ReportFactor) Report(Meter string) string {
 func consumerReport() {
 
 	for {
+
 		monitor := <-chReport
 
-		if meterMap[monitor.Meter] == nil {
-			log.Errorf("meter = %s, 未注册！！！")
-			continue
-		} else {
+		go func() {
+			lock.Lock()
+			defer lock.Unlock()
+
 			monMessage := meterMap[monitor.Meter]
 
 			//当前时间窗口+1
 			monMessage.add()
+		}()
 
-			//检查是否满足上报，由timieReport控制是否要上报
-			if isReport {
-				for key, value := range meterMap {
-
-					currTime := time.Now().Unix()
-
-					//qps每秒上报一次
-					value.ReportMonter(key, ".qps", currTime-1)
-
-					//满足上报条件，执行上报
-					if (currTime - value.LastMarkSendTs) >= value.Period {
-
-						//重置上报时间
-						value.LastMarkSendTs = currTime
-
-						for _, meterKey := range []string{".m1", ".m5", ".m15"} {
-
-							value.ReportMonter(key, meterKey, currTime)
-
-						}
-
-					}
-
-					//清理时间窗口数据
-					value.deleteTimeWindows(currTime-cleanIndex-value.Period, value.Period)
-
-				}
-				isReport = false
-			}
-		}
 	}
 
 }
@@ -211,7 +195,7 @@ func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64) {
 		log.Error(err)
 		return
 	}
-	//log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
+	log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
 	//上报信息
 	go func(body []byte) {
 		cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), mm.OpenTsDbUrl)
@@ -226,8 +210,39 @@ func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64) {
 func timieReport() {
 
 	for {
-		isReport = true
+		//isReport = true
 		time.Sleep(1 * time.Second)
+
+		go func() {
+			lock.Lock()
+			defer lock.Unlock()
+
+			for key, value := range meterMap {
+
+				currTime := time.Now().Unix()
+
+				//qps每秒上报一次
+				value.ReportMonter(key, ".qps", currTime-1)
+
+				//满足上报条件，执行上报
+				if (currTime - value.LastMarkSendTs) >= value.Period {
+
+					//重置上报时间
+					value.LastMarkSendTs = currTime
+
+					for _, meterKey := range []string{".m1", ".m5", ".m15"} {
+
+						value.ReportMonter(key, meterKey, currTime)
+
+					}
+
+				}
+
+				//清理时间窗口数据
+				value.deleteTimeWindows(currTime-cleanIndex-value.Period, value.Period)
+
+			}
+		}()
 	}
 }
 
@@ -249,6 +264,7 @@ func (mm *MonitorMessage) add() {
 	} else {
 		mm.TimeWindow[nowT] = nowTCount + 1
 	}
+	//log.Infof("tag = %s, count = %d", mm.Meter, mm.TimeWindow[nowT])
 }
 
 /**
