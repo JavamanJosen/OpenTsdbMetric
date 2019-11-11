@@ -10,6 +10,12 @@ import (
 )
 
 /**
+由ReportFactor工厂结构体统一report
+ */
+type ReportFactor struct {
+}
+
+/**
 grafana 计算指定时间内打点个数
 */
 type MonitorMessage struct {
@@ -26,10 +32,7 @@ type MonitorMessage struct {
 	OpenTsDbUrl string `json:"open_ts_db_url"`
 
 	//记录上一次report的时间
-	LastMarkSendTs    int64 `json:"last_send_ts"`
-	LastMarkM1SendTs  int64 `json:"last_mark_m_1_send_ts"`
-	LastMarkM5SendTs  int64 `json:"last_mark_m_5_send_ts"`
-	LastMarkM15SendTs int64 `json:"last_mark_m_15_send_ts"`
+	LastMarkSendTs int64 `json:"last_send_ts"`
 
 	TimeWindow map[int64]int64 `json:"time_window"`
 }
@@ -50,7 +53,7 @@ var (
 const (
 	//默认20s提交一次
 	PeriodDefault = 20
-	cleanIndex = 900
+	cleanIndex    = 1200
 )
 
 /**
@@ -66,9 +69,6 @@ func (msg *MonitorMessage) Register() string {
 
 		currTime := time.Now().Unix()
 		meterStruct.LastMarkSendTs = currTime
-		meterStruct.LastMarkM1SendTs = currTime
-		meterStruct.LastMarkM5SendTs = currTime
-		meterStruct.LastMarkM15SendTs = currTime
 
 		tags := make(map[string]interface{})
 		tags["host"] = msg.Host
@@ -84,6 +84,7 @@ func (msg *MonitorMessage) Register() string {
 		}
 		meterStruct.Period = period
 		meterStruct.OpenTsDbUrl = msg.OpenTsDbUrl
+		meterStruct.Meter = msg.Meter
 
 		meterStruct.TimeWindow = make(map[int64]int64)
 
@@ -106,7 +107,7 @@ func (msg *MonitorMessage) Register() string {
 }
 
 /**
-上报信息入口
+根据监控信息上报信息入口
 */
 func (monitor *MonitorMessage) Report() string {
 
@@ -117,6 +118,20 @@ func (monitor *MonitorMessage) Report() string {
 	chReport <- monitor
 
 	return "success";
+}
+
+func (rf *ReportFactor) Report(Meter string) string {
+	result := "success"
+	monitor := meterMap[Meter]
+	if monitor == nil {
+		result = fmt.Sprintf("meter = %s 未注册，请先注册！", Meter)
+		log.Infof(result)
+		return result
+	}
+
+	result = monitor.Report()
+
+	return result
 }
 
 /**
@@ -143,7 +158,7 @@ func consumerReport() {
 					currTime := time.Now().Unix()
 
 					//qps每秒上报一次
-					value.ReportMonter(key, ".qps", currTime - 1)
+					value.ReportMonter(key, ".qps", currTime-1)
 
 					//满足上报条件，执行上报
 					if (currTime - value.LastMarkSendTs) >= value.Period {
@@ -160,7 +175,7 @@ func consumerReport() {
 					}
 
 					//清理时间窗口数据
-					value.deleteTimeWindows(currTime-cleanIndex-value.Period,value.Period)
+					value.deleteTimeWindows(currTime-cleanIndex-value.Period, value.Period)
 
 				}
 				isReport = false
@@ -172,8 +187,8 @@ func consumerReport() {
 
 /**
 上报打点信息
- */
-func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64)  {
+*/
+func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64) {
 
 	reportStruct := make(map[string]interface{})
 	reportStruct["metric"] = key + meterKey
@@ -251,7 +266,7 @@ func (mm *MonitorMessage) getMnCount(nowTime, n int64) int64 {
 
 /**
 删除时间窗口中的无用元素
- */
+*/
 func (mm *MonitorMessage) deleteTimeWindows(startTime, limit int64) {
 
 	for i := startTime; i < startTime+limit; i++ {
