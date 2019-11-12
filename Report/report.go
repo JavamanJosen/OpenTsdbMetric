@@ -2,8 +2,10 @@ package Report
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/hunterhug/marmot/miner"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 )
@@ -196,10 +198,10 @@ func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64) {
 	}
 	log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
 	//上报信息
-	//go func(body []byte) {
-	//	cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), mm.OpenTsDbUrl)
-	//	exec.Command("bash", "-c", cmd).Output()
-	//}(body)
+	go func(body []byte) {
+		cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), mm.OpenTsDbUrl)
+		exec.Command("bash", "-c", cmd).Output()
+	}(body)
 
 }
 
