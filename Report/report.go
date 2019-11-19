@@ -3,7 +3,6 @@ package Report
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/hunterhug/marmot/miner"
 	"os"
 	"os/exec"
 	"sync"
@@ -39,7 +38,7 @@ type MonitorMessage struct {
 }
 
 var (
-	log = miner.Log()
+	//log = miner.Log()
 
 	//用来盛放
 	meterMap = map[string]*MonitorMessage{}
@@ -138,8 +137,9 @@ func (rf *ReportFactor) Report(meter string, period int64) string {
 		newMonitor.Meter = meter
 		newMonitor.Period = period
 
-		reMsg := newMonitor.Register()
-		log.Infof("reMsg = %s", reMsg)
+		newMonitor.Register()
+		//reMsg := newMonitor.Register()
+		//log.Infof("reMsg = %s", reMsg)
 	}
 
 	monitor := meterMap[meter]
@@ -193,10 +193,10 @@ func (mm *MonitorMessage) ReportMonter(key, meterKey string, currTime int64) {
 
 	body, err := json.Marshal(reportStruct)
 	if err != nil {
-		log.Error(err)
+		//log.Error(err)
 		return
 	}
-	log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
+	//log.Infof("metric = %s, ts = %d, body = %s", key, currTime, string(body))
 	//上报信息
 	go func(body []byte) {
 		cmd := fmt.Sprintf("/usr/bin/curl -i -X POST -d '%s' %s", string(body), mm.OpenTsDbUrl)
